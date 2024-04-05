@@ -124,6 +124,7 @@ class OpenAIEmbeddingFunction(EmbeddingFunction[Documents]):
         api_version: Optional[str] = None,
         deployment_id: Optional[str] = None,
         default_headers: Optional[Mapping[str, str]] = None,
+        dimensions: Optional[int] = None,
     ):
         """
         Initialize the OpenAIEmbeddingFunction.
@@ -144,6 +145,9 @@ class OpenAIEmbeddingFunction(EmbeddingFunction[Documents]):
                 point to a different deployment, such as an Azure deployment.
             deployment_id (str, optional): Deployment ID for Azure OpenAI.
             default_headers (Mapping, optional): A mapping of default headers to be sent with each API request.
+            dimensions (int, optional): The number of dimensions for the embeddings.
+                Only supported for `text-embedding-3` or later models from OpenAI.
+                https://platform.openai.com/docs/api-reference/embeddings/create#embeddings-create-dimensions
 
         """
         try:
@@ -191,6 +195,7 @@ class OpenAIEmbeddingFunction(EmbeddingFunction[Documents]):
             self._client = openai.Embedding
         self._model_name = model_name
         self._deployment_id = deployment_id
+        self._dimensions = dimensions or openai.NOT_GIVEN
 
     def __call__(self, input: Documents) -> Embeddings:
         # replace newlines, which can negatively affect performance.
@@ -199,7 +204,9 @@ class OpenAIEmbeddingFunction(EmbeddingFunction[Documents]):
         # Call the OpenAI Embedding API
         if self._v1:
             embeddings = self._client.create(
-                input=input, model=self._deployment_id or self._model_name
+                input=input,
+                model=self._deployment_id or self._model_name,
+                dimensions=self._dimensions,
             ).data
 
             # Sort resulting embeddings by index
@@ -743,9 +750,7 @@ class OpenCLIPEmbeddingFunction(EmbeddingFunction[Union[Documents, Images]]):
 
 
 class RoboflowEmbeddingFunction(EmbeddingFunction[Union[Documents, Images]]):
-    def __init__(
-        self, api_key: str = "", api_url = "https://infer.roboflow.com"
-    ) -> None:
+    def __init__(self, api_key: str = "", api_url="https://infer.roboflow.com") -> None:
         """
         Create a RoboflowEmbeddingFunction.
 
@@ -757,7 +762,7 @@ class RoboflowEmbeddingFunction(EmbeddingFunction[Union[Documents, Images]]):
             api_key = os.environ.get("ROBOFLOW_API_KEY")
 
         self._api_url = api_url
-        self._api_key = api_key 
+        self._api_key = api_key
 
         try:
             self._PILImage = importlib.import_module("PIL.Image")
@@ -789,10 +794,10 @@ class RoboflowEmbeddingFunction(EmbeddingFunction[Union[Documents, Images]]):
                     json=infer_clip_payload,
                 )
 
-                result = res.json()['embeddings']
+                result = res.json()["embeddings"]
 
                 embeddings.append(result[0])
-            
+
             elif is_document(item):
                 infer_clip_payload = {
                     "text": input,
@@ -803,13 +808,13 @@ class RoboflowEmbeddingFunction(EmbeddingFunction[Union[Documents, Images]]):
                     json=infer_clip_payload,
                 )
 
-                result = res.json()['embeddings']
+                result = res.json()["embeddings"]
 
                 embeddings.append(result[0])
 
         return embeddings
 
-      
+
 class AmazonBedrockEmbeddingFunction(EmbeddingFunction[Documents]):
     def __init__(
         self,
@@ -962,7 +967,7 @@ def create_langchain_embedding(langchain_embdding_fn: Any):  # type: ignore
 
     return ChromaLangchainEmbeddingFunction(embedding_function=langchain_embdding_fn)
 
- 
+
 class OllamaEmbeddingFunction(EmbeddingFunction[Documents]):
     """
     This class is used to generate embeddings for a list of texts using the Ollama Embedding API (https://github.com/ollama/ollama/blob/main/docs/api.md#generate-embeddings).
@@ -1018,7 +1023,7 @@ class OllamaEmbeddingFunction(EmbeddingFunction[Documents]):
             ],
         )
 
-      
+
 # List of all classes in this module
 _classes = [
     name
