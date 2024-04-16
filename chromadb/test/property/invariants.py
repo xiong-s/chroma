@@ -1,4 +1,8 @@
+import gc
 import math
+
+import psutil
+
 from chromadb.test.property.strategies import NormalizedRecordSet, RecordSet
 from typing import Callable, Optional, Tuple, Union, List, TypeVar, cast
 from typing_extensions import Literal
@@ -167,6 +171,20 @@ def is_metadata_valid(normalized_record_set: NormalizedRecordSet) -> bool:
     if normalized_record_set["metadatas"] is None:
         return True
     return not any([len(m) == 0 for m in normalized_record_set["metadatas"]])
+
+
+def fd_not_exceeding_threadpool_size(threadpool_size: int) -> None:
+    """
+    Checks that the open file descriptors are not exceeding the threadpool size
+    works only for SegmentAPI
+    """
+    current_process = psutil.Process()
+    open_files = current_process.open_files()
+    if len([p.path for p in open_files if "sqlite3" in p.path]) - 1 <= threadpool_size:
+        gc.collect()  # GC to collect the orphaned TLS objects
+    assert (
+        len([p.path for p in open_files if "sqlite3" in p.path]) - 1 <= threadpool_size
+    )
 
 
 def ann_accuracy(
