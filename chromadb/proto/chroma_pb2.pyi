@@ -95,7 +95,7 @@ class FilePaths(_message.Message):
     def __init__(self, paths: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class Segment(_message.Message):
-    __slots__ = ("id", "type", "scope", "collection", "metadata", "file_paths")
+    __slots__ = ("id", "type", "scope", "collection", "metadata", "file_paths", "log_position", "collection_version")
     class FilePathsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -109,13 +109,17 @@ class Segment(_message.Message):
     COLLECTION_FIELD_NUMBER: _ClassVar[int]
     METADATA_FIELD_NUMBER: _ClassVar[int]
     FILE_PATHS_FIELD_NUMBER: _ClassVar[int]
+    LOG_POSITION_FIELD_NUMBER: _ClassVar[int]
+    COLLECTION_VERSION_FIELD_NUMBER: _ClassVar[int]
     id: str
     type: str
     scope: SegmentScope
     collection: str
     metadata: UpdateMetadata
     file_paths: _containers.MessageMap[str, FilePaths]
-    def __init__(self, id: _Optional[str] = ..., type: _Optional[str] = ..., scope: _Optional[_Union[SegmentScope, str]] = ..., collection: _Optional[str] = ..., metadata: _Optional[_Union[UpdateMetadata, _Mapping]] = ..., file_paths: _Optional[_Mapping[str, FilePaths]] = ...) -> None: ...
+    log_position: int
+    collection_version: int
+    def __init__(self, id: _Optional[str] = ..., type: _Optional[str] = ..., scope: _Optional[_Union[SegmentScope, str]] = ..., collection: _Optional[str] = ..., metadata: _Optional[_Union[UpdateMetadata, _Mapping]] = ..., file_paths: _Optional[_Mapping[str, FilePaths]] = ..., log_position: _Optional[int] = ..., collection_version: _Optional[int] = ...) -> None: ...
 
 class Collection(_message.Message):
     __slots__ = ("id", "name", "metadata", "dimension", "tenant", "database", "log_position", "version")
