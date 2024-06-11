@@ -1,5 +1,3 @@
-from functools import cached_property
-
 from chromadb.api import ServerAPI
 from chromadb.config import DEFAULT_DATABASE, DEFAULT_TENANT, Settings, System
 from chromadb.db.system import SysDB
@@ -201,13 +199,9 @@ class SegmentAPI(ServerAPI):
 
         return Collection(
             client=self,
-            id=coll["id"],
-            name=name,
-            metadata=coll["metadata"],  # type: ignore
+            model=coll,
             embedding_function=embedding_function,
             data_loader=data_loader,
-            tenant=tenant,
-            database=database,
         )
 
     @trace_method(
@@ -260,13 +254,9 @@ class SegmentAPI(ServerAPI):
         if existing:
             return Collection(
                 client=self,
-                id=existing[0]["id"],
-                name=existing[0]["name"],
-                metadata=existing[0]["metadata"],  # type: ignore
+                model=existing[0],
                 embedding_function=embedding_function,
                 data_loader=data_loader,
-                tenant=existing[0]["tenant"],
-                database=existing[0]["database"],
             )
         else:
             raise ValueError(f"Collection {name} does not exist.")
@@ -288,11 +278,7 @@ class SegmentAPI(ServerAPI):
             collections.append(
                 Collection(
                     client=self,
-                    id=db_collection["id"],
-                    name=db_collection["name"],
-                    metadata=db_collection["metadata"],  # type: ignore
-                    tenant=db_collection["tenant"],
-                    database=db_collection["database"],
+                    model=db_collection,
                 )
             )
         return collections
@@ -376,7 +362,7 @@ class SegmentAPI(ServerAPI):
         self._manager.hint_use_collection(collection_id, t.Operation.ADD)
         validate_batch(
             (ids, embeddings, metadatas, documents, uris),
-            {"max_batch_size": self.max_batch_size},
+            {"max_batch_size": self.get_max_batch_size()},
         )
         records_to_submit = []
         for r in _records(
@@ -418,7 +404,7 @@ class SegmentAPI(ServerAPI):
         self._manager.hint_use_collection(collection_id, t.Operation.UPDATE)
         validate_batch(
             (ids, embeddings, metadatas, documents, uris),
-            {"max_batch_size": self.max_batch_size},
+            {"max_batch_size": self.get_max_batch_size()},
         )
         records_to_submit = []
         for r in _records(
@@ -462,7 +448,7 @@ class SegmentAPI(ServerAPI):
         self._manager.hint_use_collection(collection_id, t.Operation.UPSERT)
         validate_batch(
             (ids, embeddings, metadatas, documents, uris),
-            {"max_batch_size": self.max_batch_size},
+            {"max_batch_size": self.get_max_batch_size()},
         )
         records_to_submit = []
         for r in _records(
@@ -802,9 +788,8 @@ class SegmentAPI(ServerAPI):
     def get_settings(self) -> Settings:
         return self._settings
 
-    @cached_property
     @override
-    def max_batch_size(self) -> int:
+    def get_max_batch_size(self) -> int:
         return self._producer.max_batch_size
 
     # TODO: This could potentially cause race conditions in a distributed version of the

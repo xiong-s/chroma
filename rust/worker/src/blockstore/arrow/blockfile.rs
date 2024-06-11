@@ -6,10 +6,10 @@ use super::{
     sparse_index::SparseIndex,
     types::{ArrowReadableKey, ArrowReadableValue, ArrowWriteableKey, ArrowWriteableValue},
 };
+use crate::blockstore::key::KeyWrapper;
 use crate::blockstore::BlockfileError;
 use crate::errors::ErrorCodes;
 use crate::{blockstore::key::CompositeKey, errors::ChromaError};
-use arrow::error;
 use parking_lot::Mutex;
 use std::{collections::HashMap, sync::Arc};
 use std::{collections::HashSet, mem::transmute};
@@ -258,15 +258,21 @@ impl ArrowBlockfileWriter {
     }
 }
 
-pub(crate) struct ArrowBlockfileReader<'me, K: ArrowReadableKey<'me>, V: ArrowReadableValue<'me>> {
+pub(crate) struct ArrowBlockfileReader<
+    'me,
+    K: ArrowReadableKey<'me> + Into<KeyWrapper>,
+    V: ArrowReadableValue<'me>,
+> {
     block_manager: BlockManager,
-    sparse_index: SparseIndex,
+    pub(super) sparse_index: SparseIndex,
     loaded_blocks: Mutex<HashMap<Uuid, Box<Block>>>,
     marker: std::marker::PhantomData<(K, V, &'me ())>,
     id: Uuid,
 }
 
-impl<'me, K: ArrowReadableKey<'me>, V: ArrowReadableValue<'me>> ArrowBlockfileReader<'me, K, V> {
+impl<'me, K: ArrowReadableKey<'me> + Into<KeyWrapper>, V: ArrowReadableValue<'me>>
+    ArrowBlockfileReader<'me, K, V>
+{
     pub(super) fn new(id: Uuid, block_manager: BlockManager, sparse_index: SparseIndex) -> Self {
         Self {
             block_manager,
@@ -277,7 +283,7 @@ impl<'me, K: ArrowReadableKey<'me>, V: ArrowReadableValue<'me>> ArrowBlockfileRe
         }
     }
 
-    async fn get_block(&self, block_id: Uuid) -> Option<&Block> {
+    pub(super) async fn get_block(&self, block_id: Uuid) -> Option<&Block> {
         if !self.loaded_blocks.lock().contains_key(&block_id) {
             let block = self.block_manager.get(&block_id).await?;
             self.loaded_blocks.lock().insert(block_id, Box::new(block));
@@ -315,6 +321,190 @@ impl<'me, K: ArrowReadableKey<'me>, V: ArrowReadableValue<'me>> ArrowBlockfileRe
                 return Err(Box::new(BlockfileError::NotFoundError));
             }
         }
+    }
+
+    pub(crate) async fn get_at_index(
+        &'me self,
+        index: usize,
+    ) -> Result<(&'me str, K, V), Box<dyn ChromaError>> {
+        let mut block_offset = 0;
+        let mut block = None;
+        let sparse_index_len = self.sparse_index.len();
+        for i in 0..sparse_index_len {
+            let uuid = {
+                let sparse_index_forward = self.sparse_index.forward.lock();
+                *sparse_index_forward.iter().nth(i).unwrap().1
+            };
+            block = self.get_block(uuid).await;
+            match block {
+                Some(b) => {
+                    if block_offset + b.len() > index {
+                        break;
+                    }
+                    block_offset += b.len();
+                }
+                None => {
+                    return Err(Box::new(ArrowBlockfileError::BlockNotFound));
+                }
+            }
+        }
+        let block = block.unwrap();
+        let res = block.get_at_index::<'me, K, V>(index - block_offset);
+        match res {
+            Some((prefix, key, value)) => {
+                return Ok((prefix, key, value));
+            }
+            _ => {
+                return Err(Box::new(BlockfileError::NotFoundError));
+            }
+        }
+    }
+
+    /// Returns all arrow records whose key > supplied key.
+    pub(crate) async fn get_gt(
+        &'me self,
+        prefix: &str,
+        key: K,
+    ) -> Result<Vec<(&str, K, V)>, Box<dyn ChromaError>> {
+        // Get all block ids that contain keys > key from sparse index for this prefix.
+        let block_ids = self.sparse_index.get_block_ids_gt(prefix, key.clone());
+        let mut result: Vec<(&str, K, V)> = vec![];
+        // Read all the blocks individually to get keys > key.
+        for block_id in block_ids {
+            let block_opt = self.get_block(block_id).await;
+            let block = match block_opt {
+                Some(b) => b,
+                None => {
+                    return Err(Box::new(ArrowBlockfileError::BlockNotFound));
+                }
+            };
+            match block.get_gt(prefix, key.clone()) {
+                Some(data) => {
+                    result.extend(data);
+                }
+                None => {
+                    return Err(Box::new(BlockfileError::NotFoundError));
+                }
+            };
+        }
+        return Ok(result);
+    }
+
+    /// Returns all arrow records whose key < supplied key.
+    pub(crate) async fn get_lt(
+        &'me self,
+        prefix: &str,
+        key: K,
+    ) -> Result<Vec<(&str, K, V)>, Box<dyn ChromaError>> {
+        // Get all block ids that contain keys < key from sparse index.
+        let block_ids = self.sparse_index.get_block_ids_lt(prefix, key.clone());
+        let mut result: Vec<(&str, K, V)> = vec![];
+        // Read all the blocks individually to get keys < key.
+        for block_id in block_ids {
+            let block_opt = self.get_block(block_id).await;
+            let block = match block_opt {
+                Some(b) => b,
+                None => {
+                    return Err(Box::new(ArrowBlockfileError::BlockNotFound));
+                }
+            };
+            match block.get_lt(prefix, key.clone()) {
+                Some(data) => {
+                    result.extend(data);
+                }
+                None => {
+                    return Err(Box::new(BlockfileError::NotFoundError));
+                }
+            };
+        }
+        return Ok(result);
+    }
+
+    /// Returns all arrow records whose key >= supplied key.
+    pub(crate) async fn get_gte(
+        &'me self,
+        prefix: &str,
+        key: K,
+    ) -> Result<Vec<(&str, K, V)>, Box<dyn ChromaError>> {
+        // Get all block ids that contain keys >= key from sparse index.
+        let block_ids = self.sparse_index.get_block_ids_gte(prefix, key.clone());
+        let mut result: Vec<(&str, K, V)> = vec![];
+        // Read all the blocks individually to get keys >= key.
+        for block_id in block_ids {
+            let block_opt = self.get_block(block_id).await;
+            let block = match block_opt {
+                Some(b) => b,
+                None => {
+                    return Err(Box::new(ArrowBlockfileError::BlockNotFound));
+                }
+            };
+            match block.get_gte(prefix, key.clone()) {
+                Some(data) => {
+                    result.extend(data);
+                }
+                None => {
+                    return Err(Box::new(BlockfileError::NotFoundError));
+                }
+            };
+        }
+        return Ok(result);
+    }
+
+    /// Returns all arrow records whose key <= supplied key.
+    pub(crate) async fn get_lte(
+        &'me self,
+        prefix: &str,
+        key: K,
+    ) -> Result<Vec<(&str, K, V)>, Box<dyn ChromaError>> {
+        // Get all block ids that contain keys <= key from sparse index.
+        let block_ids = self.sparse_index.get_block_ids_lte(prefix, key.clone());
+        let mut result: Vec<(&str, K, V)> = vec![];
+        // Read all the blocks individually to get keys <= key.
+        for block_id in block_ids {
+            let block_opt = self.get_block(block_id).await;
+            let block = match block_opt {
+                Some(b) => b,
+                None => {
+                    return Err(Box::new(ArrowBlockfileError::BlockNotFound));
+                }
+            };
+            match block.get_lte(prefix, key.clone()) {
+                Some(data) => {
+                    result.extend(data);
+                }
+                None => {
+                    return Err(Box::new(BlockfileError::NotFoundError));
+                }
+            };
+        }
+        return Ok(result);
+    }
+
+    /// Returns all arrow records whose prefix is same as supplied prefix.
+    pub(crate) async fn get_by_prefix(
+        &'me self,
+        prefix: &str,
+    ) -> Result<Vec<(&str, K, V)>, Box<dyn ChromaError>> {
+        let block_ids = self.sparse_index.get_block_ids_prefix(prefix);
+        let mut result: Vec<(&str, K, V)> = vec![];
+        for block_id in block_ids {
+            let block_opt = self.get_block(block_id).await;
+            let block = match block_opt {
+                Some(b) => b,
+                None => {
+                    return Err(Box::new(ArrowBlockfileError::BlockNotFound));
+                }
+            };
+            match block.get_prefix(prefix) {
+                Some(data) => {
+                    result.extend(data);
+                }
+                None => {
+                    return Err(Box::new(BlockfileError::NotFoundError));
+                }
+            };
+        }
+        Ok(result)
     }
 
     pub(crate) async fn contains(&'me self, prefix: &str, key: K) -> bool {
@@ -364,17 +554,17 @@ impl<'me, K: ArrowReadableKey<'me>, V: ArrowReadableValue<'me>> ArrowBlockfileRe
 #[cfg(test)]
 mod tests {
     use crate::{
-        blockstore::{
-            arrow::{block, provider::ArrowBlockfileProvider},
-            provider::BlockfileProvider,
-        },
+        blockstore::arrow::provider::ArrowBlockfileProvider,
         segment::DataRecord,
         storage::{local::LocalStorage, Storage},
         types::MetadataValue,
     };
     use arrow::array::Int32Array;
-    use rand::seq::IteratorRandom;
+    use proptest::test_runner::Config;
+    use proptest::{num, prelude::*};
+    use rand::{seq::IteratorRandom, Rng};
     use std::collections::HashMap;
+    use tokio::runtime::Runtime;
 
     #[tokio::test]
     async fn test_count() {
@@ -405,6 +595,170 @@ mod tests {
         match count {
             Ok(c) => assert_eq!(2, c),
             Err(_) => assert!(true, "Error getting count"),
+        }
+    }
+
+    fn test_prefix(num_keys: u32, prefix_for_query: u32) {
+        Runtime::new().unwrap().block_on(async {
+            let tmp_dir = tempfile::tempdir().unwrap();
+            let storage = Storage::Local(LocalStorage::new(tmp_dir.path().to_str().unwrap()));
+            let blockfile_provider = ArrowBlockfileProvider::new(storage);
+            let writer = blockfile_provider.create::<&str, u32>().unwrap();
+            let id = writer.id();
+
+            for j in 1..=5 {
+                let prefix = format!("{}/{}", "prefix", j);
+                for i in 1..=num_keys {
+                    let key = format!("{}/{}", "key", i);
+                    writer
+                        .set(prefix.as_str(), key.as_str(), i as u32)
+                        .await
+                        .unwrap();
+                }
+            }
+            // commit.
+            writer.commit::<&str, u32>().unwrap();
+
+            let reader = blockfile_provider.open::<&str, u32>(&id).await.unwrap();
+            let prefix_query = format!("{}/{}", "prefix", prefix_for_query);
+            println!("Query {}, num_keys {}", prefix_query, num_keys);
+            let res = reader.get_by_prefix(prefix_query.as_str()).await;
+            match res {
+                Ok(c) => {
+                    let mut kv_map = HashMap::new();
+                    for entry in c {
+                        kv_map.insert(format!("{}/{}", entry.0, entry.1), entry.2);
+                    }
+                    for j in 1..=5 {
+                        let prefix = format!("{}/{}", "prefix", j);
+                        for i in 1..=num_keys {
+                            let key = format!("{}/{}", "key", i);
+                            let map_key = format!("{}/{}", prefix, key);
+                            if prefix == prefix_query {
+                                assert!(
+                                    kv_map.contains_key(&map_key),
+                                    "{}",
+                                    format!("Key {} should be present but not found", map_key)
+                                );
+                            } else {
+                                assert!(
+                                    !kv_map.contains_key(&map_key),
+                                    "{}",
+                                    format!("Key {} should not be present but found", map_key)
+                                );
+                            }
+                        }
+                    }
+                }
+                Err(_) => assert!(true, "Error running get by prefix"),
+            }
+        });
+    }
+
+    fn blockfile_comparisons(operation: ComparisonOperation, num_keys: u32, query_key: u32) {
+        Runtime::new().unwrap().block_on(async {
+            let tmp_dir = tempfile::tempdir().unwrap();
+            let storage = Storage::Local(LocalStorage::new(tmp_dir.path().to_str().unwrap()));
+            let blockfile_provider = ArrowBlockfileProvider::new(storage);
+            let writer = blockfile_provider.create::<&str, u32>().unwrap();
+            let id = writer.id();
+            println!("Number of keys {}", num_keys);
+            let prefix = "prefix";
+            for i in 1..num_keys {
+                let key = format!("{}/{}", "key", i);
+                writer.set(prefix, key.as_str(), i as u32).await.unwrap();
+            }
+            // commit.
+            writer.commit::<&str, u32>().unwrap();
+
+            let reader = blockfile_provider.open::<&str, u32>(&id).await.unwrap();
+            let query = format!("{}/{}", "key", query_key);
+            println!("Query {}", query);
+            println!("Operation {:?}", operation);
+            let greater_than = match operation {
+                ComparisonOperation::GreaterThan => reader.get_gt(prefix, query.as_str()).await,
+                ComparisonOperation::GreaterThanOrEquals => {
+                    reader.get_gte(prefix, query.as_str()).await
+                }
+                ComparisonOperation::LessThan => reader.get_lt(prefix, query.as_str()).await,
+                ComparisonOperation::LessThanOrEquals => {
+                    reader.get_lte(prefix, query.as_str()).await
+                }
+                _ => {
+                    assert!(true, "Invalid operation");
+                    // Won't reach here.
+                    Ok(vec![])
+                }
+            };
+            match greater_than {
+                Ok(c) => {
+                    let mut kv_map = HashMap::new();
+                    for entry in c {
+                        kv_map.insert(entry.1, entry.2);
+                    }
+                    for i in 1..num_keys {
+                        let key = format!("{}/{}", "key", i);
+                        let mut condition: bool = false;
+                        match operation {
+                            ComparisonOperation::GreaterThan => condition = key > query,
+                            ComparisonOperation::GreaterThanOrEquals => condition = key >= query,
+                            ComparisonOperation::LessThan => condition = key < query,
+                            ComparisonOperation::LessThanOrEquals => condition = key <= query,
+                            _ => assert!(true, "invalid input"),
+                        }
+                        if condition {
+                            assert!(
+                                kv_map.contains_key(key.as_str()),
+                                "{}",
+                                format!("Key {} should be present but not found", key)
+                            );
+                        } else {
+                            assert!(
+                                !kv_map.contains_key(key.as_str()),
+                                "{}",
+                                format!("Key {} should not be present but found", key)
+                            );
+                        }
+                    }
+                }
+                Err(_) => assert!(true, "Error getting gt"),
+            }
+        });
+    }
+
+    #[derive(Debug)]
+    pub(crate) enum ComparisonOperation {
+        GreaterThan,
+        LessThan,
+        GreaterThanOrEquals,
+        LessThanOrEquals,
+    }
+
+    proptest! {
+        #![proptest_config(Config::with_cases(10))]
+        #[test]
+        fn test_get_gt(num_key in 1..10000u32, query_key in 1..10000u32) {
+            blockfile_comparisons(ComparisonOperation::GreaterThan, num_key, query_key);
+        }
+
+        #[test]
+        fn test_get_lt(num_key in 1..10000u32, query_key in 1..10000u32) {
+            blockfile_comparisons(ComparisonOperation::LessThan, num_key, query_key);
+        }
+
+        #[test]
+        fn test_get_gte(num_key in 1..10000u32, query_key in 1..10000u32) {
+            blockfile_comparisons(ComparisonOperation::GreaterThanOrEquals, num_key, query_key);
+        }
+
+        #[test]
+        fn test_get_lte(num_key in 1..10000u32, query_key in 1..10000u32) {
+            blockfile_comparisons(ComparisonOperation::LessThanOrEquals, num_key, query_key);
+        }
+
+        #[test]
+        fn test_get_by_prefix(num_key in 1..10000u32, prefix_query in 1..=5u32) {
+            test_prefix(num_key, prefix_query);
         }
     }
 
@@ -785,6 +1139,37 @@ mod tests {
                 let value = reader.get("key", &key).await.unwrap();
                 assert_eq!(value, format!("{:04}", i));
             }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_at_index() {
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let storage = Storage::Local(LocalStorage::new(tmp_dir.path().to_str().unwrap()));
+        let blockfile_provider = ArrowBlockfileProvider::new(storage);
+        let writer = blockfile_provider.create::<&str, &Int32Array>().unwrap();
+        let id_1 = writer.id();
+
+        let n = 1200;
+        for i in 0..n {
+            let key = format!("{:04}", i);
+            let value = Int32Array::from(vec![i]);
+            writer.set("key", key.as_str(), &value).await.unwrap();
+        }
+        writer.commit::<&str, &Int32Array>().unwrap();
+
+        let reader = blockfile_provider
+            .open::<&str, Int32Array>(&id_1)
+            .await
+            .unwrap();
+
+        for i in 0..n {
+            let expected_key = format!("{:04}", i);
+            let expected_value = Int32Array::from(vec![i]);
+            let res = reader.get_at_index(i as usize).await.unwrap();
+            assert_eq!(res.0, "key");
+            assert_eq!(res.1, expected_key);
+            assert_eq!(res.2, expected_value);
         }
     }
 }

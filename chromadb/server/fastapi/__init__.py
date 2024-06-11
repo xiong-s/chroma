@@ -12,14 +12,12 @@ from typing import (
 )
 import fastapi
 import orjson
-
 from anyio import (
     to_thread,
     CapacityLimiter,
 )
 from fastapi import FastAPI as _FastAPI, Response, Request
 from fastapi.responses import JSONResponse, ORJSONResponse
-
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.routing import APIRoute
 from fastapi import HTTPException, status
@@ -57,9 +55,8 @@ from chromadb.server.fastapi.types import (
     UpdateEmbedding,
 )
 from starlette.datastructures import Headers
-
 import logging
-
+from chromadb.telemetry.product.events import ServerStartEvent
 from chromadb.utils.fastapi import fastapi_json_response, string_to_uuid as _uuid
 from chromadb.telemetry.opentelemetry.fastapi import instrument_fastapi
 from chromadb.types import Database, Tenant
@@ -69,6 +66,7 @@ from chromadb.telemetry.opentelemetry import (
     OpenTelemetryGranularity,
     trace_method,
 )
+from chromadb.types import Collection as CollectionModel
 
 logger = logging.getLogger(__name__)
 
@@ -303,6 +301,8 @@ class FastAPI(Server):
 
         use_route_names_as_operation_ids(self._app)
         instrument_fastapi(self._app)
+        telemetry_client = self._system.instance(ProductTelemetryClient)
+        telemetry_client.capture(ServerStartEvent())
 
     def shutdown(self) -> None:
         self._system.stop()
@@ -512,7 +512,7 @@ class FastAPI(Server):
         offset: Optional[int] = None,
         tenant: str = DEFAULT_TENANT,
         database: str = DEFAULT_DATABASE,
-    ) -> Sequence[Collection]:
+    ) -> Sequence[CollectionModel]:
         (
             maybe_tenant,
             maybe_database,
@@ -528,7 +528,7 @@ class FastAPI(Server):
         if maybe_database:
             database = maybe_database
 
-        return cast(
+        api_collections = cast(
             Sequence[Collection],
             await to_thread.run_sync(
                 self._api.list_collections,
@@ -539,6 +539,8 @@ class FastAPI(Server):
                 limiter=self._capacity_limiter,
             ),
         )
+
+        return [c.get_model() for c in api_collections]
 
     @trace_method("FastAPI.count_collections", OpenTelemetryGranularity.OPERATION)
     async def count_collections(
@@ -578,7 +580,7 @@ class FastAPI(Server):
         request: Request,
         tenant: str = DEFAULT_TENANT,
         database: str = DEFAULT_DATABASE,
-    ) -> Collection:
+    ) -> CollectionModel:
         def process_create_collection(
             request: Request, tenant: str, database: str, raw_body: bytes
         ) -> Collection:
@@ -607,7 +609,7 @@ class FastAPI(Server):
                 database=database,
             )
 
-        return cast(
+        api_collection = cast(
             Collection,
             await to_thread.run_sync(
                 process_create_collection,
@@ -618,6 +620,7 @@ class FastAPI(Server):
                 limiter=self._capacity_limiter,
             ),
         )
+        return api_collection.get_model()
 
     @trace_method("FastAPI.get_collection", OpenTelemetryGranularity.OPERATION)
     async def get_collection(
@@ -626,7 +629,7 @@ class FastAPI(Server):
         collection_name: str,
         tenant: str = DEFAULT_TENANT,
         database: str = DEFAULT_DATABASE,
-    ) -> Collection:
+    ) -> CollectionModel:
         (
             maybe_tenant,
             maybe_database,
@@ -642,7 +645,7 @@ class FastAPI(Server):
         if maybe_database:
             database = maybe_database
 
-        return cast(
+        api_collection = cast(
             Collection,
             await to_thread.run_sync(
                 self._api.get_collection,
@@ -655,6 +658,7 @@ class FastAPI(Server):
                 limiter=self._capacity_limiter,
             ),
         )
+        return api_collection.get_model()
 
     @trace_method("FastAPI.update_collection", OpenTelemetryGranularity.OPERATION)
     async def update_collection(
@@ -954,7 +958,7 @@ class FastAPI(Server):
     async def pre_flight_checks(self) -> Dict[str, Any]:
         def process_pre_flight_checks() -> Dict[str, Any]:
             return {
-                "max_batch_size": self._api.max_batch_size,
+                "max_batch_size": self._api.get_max_batch_size(),
             }
 
         return cast(
