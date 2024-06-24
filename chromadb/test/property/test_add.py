@@ -47,6 +47,7 @@ def test_add(
         metadata=collection.metadata,  # type: ignore
         embedding_function=collection.embedding_function,
     )
+    initial_version = coll.get_model()["version"]
 
     normalized_record_set = invariants.wrap_all(record_set)
 
@@ -61,7 +62,6 @@ def test_add(
         # Only wait for compaction if the size of the collection is
         # some minimal size
         if should_compact and len(normalized_record_set["ids"]) > 10:
-            initial_version = coll.get_model()["version"]
             # Wait for the model to be updated
             wait_for_version_increase(api, collection.name, initial_version)
 
