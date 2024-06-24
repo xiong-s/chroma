@@ -173,6 +173,7 @@ recordset_st = st.shared(
     suppress_health_check=[
         HealthCheck.function_scoped_fixture,
         HealthCheck.large_base_example,
+        HealthCheck.filter_too_much,
     ],
 )  # type: ignore
 @given(
@@ -198,6 +199,8 @@ def test_filterable_metadata_get(
         embedding_function=collection.embedding_function,
     )
 
+    initial_version = coll.get_model()["version"]
+
     if not invariants.is_metadata_valid(invariants.wrap_all(record_set)):
         with pytest.raises(Exception):
             coll.add(**record_set)
@@ -209,7 +212,6 @@ def test_filterable_metadata_get(
         # Only wait for compaction if the size of the collection is
         # some minimal size
         if should_compact and len(record_set["ids"]) > 10:
-            initial_version = coll.get_model()["version"]
             # Wait for the model to be updated
             wait_for_version_increase(api, collection.name, initial_version)
 
@@ -224,6 +226,7 @@ def test_filterable_metadata_get(
     suppress_health_check=[
         HealthCheck.function_scoped_fixture,
         HealthCheck.large_base_example,
+        HealthCheck.filter_too_much,
     ],
 )  # type: ignore
 @given(
@@ -258,6 +261,8 @@ def test_filterable_metadata_get_limit_offset(
         embedding_function=collection.embedding_function,
     )
 
+    initial_version = coll.get_model()["version"]
+
     if not invariants.is_metadata_valid(invariants.wrap_all(record_set)):
         with pytest.raises(Exception):
             coll.add(**record_set)
@@ -269,7 +274,6 @@ def test_filterable_metadata_get_limit_offset(
         # Only wait for compaction if the size of the collection is
         # some minimal size
         if should_compact and len(record_set["ids"]) > 10:
-            initial_version = coll.get_model()["version"]
             # Wait for the model to be updated
             wait_for_version_increase(api, collection.name, initial_version)
 
@@ -287,6 +291,7 @@ def test_filterable_metadata_get_limit_offset(
     suppress_health_check=[
         HealthCheck.function_scoped_fixture,
         HealthCheck.large_base_example,
+        HealthCheck.filter_too_much,
     ],
 )
 @given(
@@ -314,6 +319,7 @@ def test_filterable_metadata_query(
         metadata=collection.metadata,  # type: ignore
         embedding_function=collection.embedding_function,
     )
+    initial_version = coll.get_model()["version"]
     normalized_record_set = invariants.wrap_all(record_set)
 
     if not invariants.is_metadata_valid(normalized_record_set):
@@ -327,7 +333,6 @@ def test_filterable_metadata_query(
         # Only wait for compaction if the size of the collection is
         # some minimal size
         if should_compact and len(record_set["ids"]) > 10:
-            initial_version = coll.get_model()["version"]
             # Wait for the model to be updated
             wait_for_version_increase(api, collection.name, initial_version)
 
