@@ -1,0 +1,35 @@
+name: Build docker image
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "fork/**"
+
+jobs:
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Login to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build amd64
+        uses: docker/build-push-action@v5
+        with:
+          file: Dockerfile
+          platforms: linux/amd64
+          tags: ghcr.io/${{ github.repository }}:latest
+          build-args: |
+            CHROMA_HOST_ADDR=0.0.0.0
+            CHROMA_HOST_PORT=8000
+            CHROMA_WORKERS=1
+            CHROMA_LOG_CONFIG=chromadb/log_config.yml
+            CHROMA_TIMEOUT_KEEP_ALIVE=30
+          push: true
